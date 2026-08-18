@@ -1471,6 +1471,48 @@ static void create_smmu(const VirtMachineState *vms,
     g_free(node);
 }
 
+/* Describe the fixed QEMU edu device used by the pKVM assignment PoC.
+ * The matching command line must create it at 00:02.0. Linux assigns its
+ * 1 MiB BAR0 at the first address in the 32-bit PCI MMIO window. */
+static void create_pkvm_edu_assignment(VirtMachineState *vms)
+{
+    MachineState *ms = MACHINE(vms);
+    const char assign_compat[] = "pkvm,device-assignment";
+    const char device_compat[] = "qemu,edu-pkvm-assignment";
+    const hwaddr base = vms->memmap[VIRT_PCIE_MMIO].base;
+    const hwaddr size = 1 * MiB;
+    const uint32_t sid = PCI_DEVFN(2, 0);
+    uint32_t device_phandle;
+    char *node;
+
+    if (!vms->pkvm_edu_assignment) {
+        return;
+    }
+    if (vms->iommu != VIRT_IOMMU_SMMUV3) {
+        error_report("pkvm-edu-assignment requires iommu=smmuv3");
+        exit(1);
+    }
+
+    device_phandle = qemu_fdt_alloc_phandle(ms->fdt);
+    node = g_strdup_printf("/pkvm-edu@%" PRIx64, base);
+    qemu_fdt_add_subnode(ms->fdt, node);
+    qemu_fdt_setprop(ms->fdt, node, "compatible", device_compat,
+                     sizeof(device_compat));
+    qemu_fdt_setprop_string(ms->fdt, node, "status", "disabled");
+    qemu_fdt_setprop_sized_cells(ms->fdt, node, "reg", 2, base, 2, size);
+    qemu_fdt_setprop_cells(ms->fdt, node, "iommus",
+                           vms->iommu_phandle, sid);
+    qemu_fdt_setprop_cell(ms->fdt, node, "phandle", device_phandle);
+    g_free(node);
+
+    node = g_strdup("/pkvm-device-assignment");
+    qemu_fdt_add_subnode(ms->fdt, node);
+    qemu_fdt_setprop(ms->fdt, node, "compatible", assign_compat,
+                     sizeof(assign_compat));
+    qemu_fdt_setprop_cells(ms->fdt, node, "devices", device_phandle, 1);
+    g_free(node);
+}
+
 static void create_virtio_iommu_dt_bindings(VirtMachineState *vms)
 {
     const char compat[] = "virtio,pci-iommu\0pci1af4,1057";
@@ -1617,6 +1659,7 @@ static void create_pcie(VirtMachineState *vms)
         switch (vms->iommu) {
         case VIRT_IOMMU_SMMUV3:
             create_smmu(vms, vms->bus);
+            create_pkvm_edu_assignment(vms);
             qemu_fdt_setprop_cells(ms->fdt, nodename, "iommu-map",
                                    0x0, vms->iommu_phandle, 0x0, 0x10000);
             break;
@@ -2794,6 +2837,16 @@ static bool virt_get_default_bus_bypass_iommu(Object *obj, Error **errp)
     return vms->default_bus_bypass_iommu;
 }
 
+static bool virt_get_pkvm_edu_assignment(Object *obj, Error **errp)
+{
+    return VIRT_MACHINE(obj)->pkvm_edu_assignment;
+}
+
+static void virt_set_pkvm_edu_assignment(Object *obj, bool value, Error **errp)
+{
+    VIRT_MACHINE(obj)->pkvm_edu_assignment = value;
+}
+
 static void virt_set_default_bus_bypass_iommu(Object *obj, bool value,
                                               Error **errp)
 {
@@ -3275,6 +3328,9 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
     object_class_property_add_bool(oc, "default-bus-bypass-iommu",
                                    virt_get_default_bus_bypass_iommu,
                                    virt_set_default_bus_bypass_iommu);
+    object_class_property_add_bool(oc, "pkvm-edu-assignment",
+                                   virt_get_pkvm_edu_assignment,
+                                   virt_set_pkvm_edu_assignment);
     object_class_property_set_description(oc, "default-bus-bypass-iommu",
                                           "Set on/off to enable/disable "
                                           "bypass_iommu for default root bus");

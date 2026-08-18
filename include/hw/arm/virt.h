@@ -160,6 +160,7 @@ struct VirtMachineState {
     VirtGICType gic_version;
     VirtIOMMUType iommu;
     bool default_bus_bypass_iommu;
+    bool pkvm_edu_assignment;
     VirtMSIControllerType msi_controller;
     uint16_t virtio_iommu_bdf;
     struct arm_boot_info bootinfo;
