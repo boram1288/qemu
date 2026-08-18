@@ -1471,18 +1471,16 @@ static void create_smmu(const VirtMachineState *vms,
     g_free(node);
 }
 
-/* Describe the fixed QEMU edu device used by the pKVM assignment PoC.
- * The matching command line must create it at 00:02.0. Linux assigns its
- * 1 MiB BAR0 at the first address in the 32-bit PCI MMIO window. */
+/* Describe two fixed QEMU edu devices used by the pKVM assignment PoC.
+ * The matching command line must create them at 00:02.0 and 00:03.0. */
 static void create_pkvm_edu_assignment(VirtMachineState *vms)
 {
     MachineState *ms = MACHINE(vms);
     const char assign_compat[] = "pkvm,device-assignment";
     const char device_compat[] = "qemu,edu-pkvm-assignment";
-    const hwaddr base = vms->memmap[VIRT_PCIE_MMIO].base;
     const hwaddr size = 1 * MiB;
-    const uint32_t sid = PCI_DEVFN(2, 0);
-    uint32_t device_phandle;
+    uint32_t device_phandle[2];
+    int i;
     char *node;
 
     if (!vms->pkvm_edu_assignment) {
@@ -1493,23 +1491,30 @@ static void create_pkvm_edu_assignment(VirtMachineState *vms)
         exit(1);
     }
 
-    device_phandle = qemu_fdt_alloc_phandle(ms->fdt);
-    node = g_strdup_printf("/pkvm-edu@%" PRIx64, base);
-    qemu_fdt_add_subnode(ms->fdt, node);
-    qemu_fdt_setprop(ms->fdt, node, "compatible", device_compat,
-                     sizeof(device_compat));
-    qemu_fdt_setprop_string(ms->fdt, node, "status", "disabled");
-    qemu_fdt_setprop_sized_cells(ms->fdt, node, "reg", 2, base, 2, size);
-    qemu_fdt_setprop_cells(ms->fdt, node, "iommus",
-                           vms->iommu_phandle, sid);
-    qemu_fdt_setprop_cell(ms->fdt, node, "phandle", device_phandle);
-    g_free(node);
+    for (i = 0; i < 2; i++) {
+        hwaddr base = vms->memmap[VIRT_PCIE_MMIO].base + i * size;
+        uint32_t sid = PCI_DEVFN(2 + i, 0);
+
+        device_phandle[i] = qemu_fdt_alloc_phandle(ms->fdt);
+        node = g_strdup_printf("/pkvm-edu@%" PRIx64, base);
+        qemu_fdt_add_subnode(ms->fdt, node);
+        qemu_fdt_setprop(ms->fdt, node, "compatible", device_compat,
+                         sizeof(device_compat));
+        qemu_fdt_setprop_sized_cells(ms->fdt, node, "reg",
+                                     2, base, 2, size);
+        qemu_fdt_setprop_cells(ms->fdt, node, "iommus",
+                               vms->iommu_phandle, sid);
+        qemu_fdt_setprop_cell(ms->fdt, node, "phandle",
+                              device_phandle[i]);
+        g_free(node);
+    }
 
     node = g_strdup("/pkvm-device-assignment");
     qemu_fdt_add_subnode(ms->fdt, node);
     qemu_fdt_setprop(ms->fdt, node, "compatible", assign_compat,
                      sizeof(assign_compat));
-    qemu_fdt_setprop_cells(ms->fdt, node, "devices", device_phandle, 1);
+    qemu_fdt_setprop_cells(ms->fdt, node, "devices",
+                           device_phandle[0], 1, device_phandle[1], 2);
     g_free(node);
 }
 

@@ -43,6 +43,8 @@ DECLARE_INSTANCE_CHECKER(EduState, EDU,
 
 #define DMA_START       0x40000
 #define DMA_SIZE        4096
+#define EDU_RESET       0xa0
+#define EDU_RESET_MAGIC 0x45535552
 
 struct EduState {
     PCIDevice pdev;
@@ -231,6 +233,9 @@ static uint64_t edu_mmio_read(void *opaque, hwaddr addr, unsigned size)
     case 0x98:
         dma_rw(edu, false, &val, &edu->dma.cmd, false);
         break;
+    case EDU_RESET:
+        val = 0;
+        break;
     }
 
     return val;
@@ -295,6 +300,18 @@ static void edu_mmio_write(void *opaque, hwaddr addr, uint64_t val,
             break;
         }
         dma_rw(edu, true, &val, &edu->dma.cmd, true);
+        break;
+    case EDU_RESET:
+        if (val != EDU_RESET_MAGIC) {
+            break;
+        }
+        timer_del(&edu->dma_timer);
+        edu_lower_irq(edu, UINT32_MAX);
+        edu->addr4 = 0;
+        edu->fact = 0;
+        qatomic_set(&edu->status, 0);
+        memset(&edu->dma, 0, sizeof(edu->dma));
+        memset(edu->dma_buf, 0, sizeof(edu->dma_buf));
         break;
     }
 }
