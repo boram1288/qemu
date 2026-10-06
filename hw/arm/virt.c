@@ -1479,11 +1479,15 @@ static void create_pkvm_edu_assignment(VirtMachineState *vms)
     const char assign_compat[] = "pkvm,device-assignment";
     const char device_compat[] = "qemu,edu-pkvm-assignment";
     const hwaddr size = 1 * MiB;
-    uint32_t device_phandle[2];
+    uint32_t device_phandle[3];
     int i;
     char *node;
 
     if (!vms->pkvm_edu_assignment) {
+        if (vms->pkvm_camera_assignment) {
+            error_report("pkvm-camera-assignment requires pkvm-edu-assignment");
+            exit(1);
+        }
         return;
     }
     if (vms->iommu != VIRT_IOMMU_SMMUV3) {
@@ -1509,12 +1513,34 @@ static void create_pkvm_edu_assignment(VirtMachineState *vms)
         g_free(node);
     }
 
+    if (vms->pkvm_camera_assignment) {
+        node = g_strdup("/pkvm-xhci@b000000");
+        device_phandle[2] = qemu_fdt_alloc_phandle(ms->fdt);
+        qemu_fdt_add_subnode(ms->fdt, node);
+        qemu_fdt_setprop_string(ms->fdt, node, "compatible", "generic-xhci");
+        qemu_fdt_setprop(ms->fdt, node, "dma-coherent", NULL, 0);
+        qemu_fdt_setprop_sized_cells(ms->fdt, node, "reg",
+                                     2, 0x0b000000, 2, 0x4000);
+        qemu_fdt_setprop_cells(ms->fdt, node, "iommus",
+                               vms->iommu_phandle, PCI_DEVFN(4, 0));
+        qemu_fdt_setprop_cells(ms->fdt, node, "interrupts",
+                               0, vms->irqmap[VIRT_PCIE], 4);
+        qemu_fdt_setprop_cell(ms->fdt, node, "phandle", device_phandle[2]);
+        g_free(node);
+    }
+
     node = g_strdup("/pkvm-device-assignment");
     qemu_fdt_add_subnode(ms->fdt, node);
     qemu_fdt_setprop(ms->fdt, node, "compatible", assign_compat,
                      sizeof(assign_compat));
+    if (vms->pkvm_camera_assignment) {
+        qemu_fdt_setprop_cells(ms->fdt, node, "devices",
+                              device_phandle[0], 1, device_phandle[1], 2,
+                              device_phandle[2], 3);
+    } else {
     qemu_fdt_setprop_cells(ms->fdt, node, "devices",
                            device_phandle[0], 1, device_phandle[1], 2);
+    }
     g_free(node);
 }
 
@@ -1665,8 +1691,15 @@ static void create_pcie(VirtMachineState *vms)
         case VIRT_IOMMU_SMMUV3:
             create_smmu(vms, vms->bus);
             create_pkvm_edu_assignment(vms);
-            qemu_fdt_setprop_cells(ms->fdt, nodename, "iommu-map",
-                                   0x0, vms->iommu_phandle, 0x0, 0x10000);
+            if (vms->pkvm_camera_assignment) {
+                /* SID 0x20 belongs to the platform xHCI node only. */
+                qemu_fdt_setprop_cells(ms->fdt, nodename, "iommu-map",
+                                      0, vms->iommu_phandle, 0, 0x20,
+                                      0x21, vms->iommu_phandle, 0x21, 0xffdf);
+            } else {
+                qemu_fdt_setprop_cells(ms->fdt, nodename, "iommu-map",
+                                      0, vms->iommu_phandle, 0, 0x10000);
+            }
             break;
         default:
             g_assert_not_reached();
@@ -2852,6 +2885,16 @@ static void virt_set_pkvm_edu_assignment(Object *obj, bool value, Error **errp)
     VIRT_MACHINE(obj)->pkvm_edu_assignment = value;
 }
 
+static bool virt_get_pkvm_camera_assignment(Object *obj, Error **errp)
+{
+    return VIRT_MACHINE(obj)->pkvm_camera_assignment;
+}
+
+static void virt_set_pkvm_camera_assignment(Object *obj, bool value, Error **errp)
+{
+    VIRT_MACHINE(obj)->pkvm_camera_assignment = value;
+}
+
 static void virt_set_default_bus_bypass_iommu(Object *obj, bool value,
                                               Error **errp)
 {
@@ -3336,6 +3379,9 @@ static void virt_machine_class_init(ObjectClass *oc, void *data)
     object_class_property_add_bool(oc, "pkvm-edu-assignment",
                                    virt_get_pkvm_edu_assignment,
                                    virt_set_pkvm_edu_assignment);
+    object_class_property_add_bool(oc, "pkvm-camera-assignment",
+                                   virt_get_pkvm_camera_assignment,
+                                   virt_set_pkvm_camera_assignment);
     object_class_property_set_description(oc, "default-bus-bypass-iommu",
                                           "Set on/off to enable/disable "
                                           "bypass_iommu for default root bus");

@@ -31,6 +31,7 @@
 #include "hcd-xhci-pci.h"
 #include "trace.h"
 #include "qapi/error.h"
+#include "exec/address-spaces.h"
 
 #define OFF_MSIX_TABLE  0x3000
 #define OFF_MSIX_PBA    0x3800
@@ -162,10 +163,24 @@ static void usb_xhci_pci_realize(struct PCIDevice *dev, Error **errp)
         /* With msi=auto, we fall back to MSI off silently */
         error_free(err);
     }
-    pci_register_bar(dev, 0,
-                     PCI_BASE_ADDRESS_SPACE_MEMORY |
-                     PCI_BASE_ADDRESS_MEM_TYPE_64,
-                     &s->xhci.mem);
+    if (s->pkvm_platform) {
+        /* One protected platform window, with PCI used only as DMA SID.
+         * No BAR alias may bypass EL2's ownership of this MMIO window. */
+        if (dev->devfn != PCI_DEVFN(4, 0) ||
+            s->msi != ON_OFF_AUTO_OFF || s->msix != ON_OFF_AUTO_OFF) {
+            error_setg(errp, "pkvm-platform xHCI requires addr=4,msi=off,msix=off");
+            return;
+        }
+        pci_set_word(dev->config + PCI_CLASS_DEVICE, PCI_CLASS_OTHERS);
+        dev->config[PCI_CLASS_PROG] = 0;
+        memory_region_add_subregion(get_system_memory(), 0x0b000000,
+                                    &s->xhci.mem);
+    } else {
+        pci_register_bar(dev, 0,
+                         PCI_BASE_ADDRESS_SPACE_MEMORY |
+                         PCI_BASE_ADDRESS_MEM_TYPE_64,
+                         &s->xhci.mem);
+    }
 
     if (pci_bus_is_express(pci_get_bus(dev))) {
         ret = pcie_endpoint_cap_init(dev, 0xa0);
@@ -180,11 +195,20 @@ static void usb_xhci_pci_realize(struct PCIDevice *dev, Error **errp)
                   0x90, NULL);
     }
     s->xhci.as = pci_get_address_space(dev);
+    if (s->pkvm_platform) {
+        pci_default_write_config(dev, PCI_COMMAND, PCI_COMMAND_MASTER, 2);
+        /* The controller exposes no programmable BAR or MSI/MSI-X. */
+        dev->wmask[PCI_COMMAND] = 0;
+        dev->wmask[PCI_COMMAND + 1] = 0;
+    }
 }
 
 static void usb_xhci_pci_exit(PCIDevice *dev)
 {
     XHCIPciState *s = XHCI_PCI(dev);
+    if (s->pkvm_platform) {
+        memory_region_del_subregion(get_system_memory(), &s->xhci.mem);
+    }
     /* destroy msix memory region */
     if (dev->msix_table && dev->msix_pba
         && dev->msix_entry_used) {
@@ -217,6 +241,7 @@ static void xhci_instance_init(Object *obj)
 }
 
 static const Property xhci_pci_properties[] = {
+    DEFINE_PROP_BOOL("pkvm-platform", XHCIPciState, pkvm_platform, false),
     DEFINE_PROP_ON_OFF_AUTO("msi", XHCIPciState, msi, ON_OFF_AUTO_AUTO),
     DEFINE_PROP_ON_OFF_AUTO("msix", XHCIPciState, msix, ON_OFF_AUTO_AUTO),
     DEFINE_PROP_BOOL("conditional-intr-mapping", XHCIPciState,

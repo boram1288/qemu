@@ -2729,6 +2729,7 @@ static void xhci_reset(DeviceState *dev)
         xhci->intr[i].er_pcs = 1;
         xhci->intr[i].ev_buffer_put = 0;
         xhci->intr[i].ev_buffer_get = 0;
+        xhci_intr_update(xhci, i);
     }
 
     xhci->mfindex_start = qemu_clock_get_ns(QEMU_CLOCK_VIRTUAL);
