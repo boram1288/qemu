@@ -1080,7 +1080,10 @@ static void xhci_set_ep_state(XHCIState *xhci, XHCIEPContext *epctx,
 static void xhci_ep_kick_timer(void *opaque)
 {
     XHCIEPContext *epctx = opaque;
-    xhci_kick_epctx(epctx, 0);
+    /* A pending timer is not a guest doorbell and cannot restart a stopped EP. */
+    if (epctx->state == EP_RUNNING) {
+        xhci_kick_epctx(epctx, 0);
+    }
 }
 
 static XHCIEPContext *xhci_alloc_epctx(XHCIState *xhci,
@@ -1315,6 +1318,16 @@ static TRBCCode xhci_stop_ep(XHCIState *xhci, unsigned int slotid,
         return CC_EP_NOT_ENABLED_ERROR;
     }
 
+    epctx = slot->eps[epid-1];
+    if (!epctx->nr_pstreams && epctx->retry && epctx->retry->timed_xfer) {
+        XHCITRB *trb = &epctx->retry->trbs[0];
+        /* Fetching a scheduled TD advances the internal ring before it is
+         * serviced. Stop Endpoint must expose the unserviced TD, not its
+         * successor, so the guest can identify and cancel the stopped TD.
+         */
+        epctx->ring.dequeue = trb->addr;
+        epctx->ring.ccs = !!(trb->control & TRB_C);
+    }
     if (xhci_ep_nuke_xfers(xhci, slotid, epid, CC_STOPPED) > 0) {
         DPRINTF("xhci: FIXME: endpoint stopped w/ xfers running, "
                 "data might be lost\n");
@@ -1322,6 +1335,7 @@ static TRBCCode xhci_stop_ep(XHCIState *xhci, unsigned int slotid,
 
     epctx = slot->eps[epid-1];
 
+    timer_del(epctx->kick_timer);
     xhci_set_ep_state(xhci, epctx, NULL, EP_STOPPED);
 
     if (epctx->nr_pstreams) {
@@ -3322,6 +3336,8 @@ static void xhci_wakeup_endpoint(USBBus *bus, USBEndpoint *ep,
 {
     XHCIState *xhci = container_of(bus, XHCIState, bus);
     int slotid;
+    unsigned int epid;
+    XHCIEPContext *epctx;
 
     DPRINTF("%s\n", __func__);
     slotid = ep->dev->addr;
@@ -3330,7 +3346,15 @@ static void xhci_wakeup_endpoint(USBBus *bus, USBEndpoint *ep,
         DPRINTF("%s: oops, no slot for dev %d\n", __func__, ep->dev->addr);
         return;
     }
-    xhci_kick_ep(xhci, slotid, xhci_find_epid(ep), stream);
+    epid = xhci_find_epid(ep);
+    epctx = xhci->slots[slotid - 1].eps[epid - 1];
+    /* usb-host ISO completions may arrive after Stop Endpoint. Only a guest
+     * doorbell may restart the endpoint; backend wakeups must leave it stopped.
+     */
+    if (!epctx || epctx->state != EP_RUNNING) {
+        return;
+    }
+    xhci_kick_ep(xhci, slotid, epid, stream);
 }
 
 static USBBusOps xhci_bus_ops = {
