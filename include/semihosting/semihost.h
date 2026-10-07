@@ -32,6 +32,11 @@ static inline bool semihosting_enabled(bool is_user)
     return true;
 }
 
+static inline unsigned semihosting_get_min_el(void)
+{
+    return 0;
+}
+
 static inline SemihostingTarget semihosting_get_target(void)
 {
     return SEMIHOSTING_TARGET_AUTO;
@@ -59,6 +64,8 @@ static inline const char *semihosting_get_cmdline(void)
  * Return true if guest code is allowed to make semihosting calls.
  */
 bool semihosting_enabled(bool is_user);
+/* ARM A-profile: deny calls below this exception level (default 0). */
+unsigned semihosting_get_min_el(void);
 SemihostingTarget semihosting_get_target(void);
 const char *semihosting_get_arg(int i);
 int semihosting_get_argc(void);

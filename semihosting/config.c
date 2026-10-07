@@ -38,6 +38,9 @@ QemuOptsList qemu_semihosting_config_opts = {
             .name = "userspace",
             .type = QEMU_OPT_BOOL,
         }, {
+            .name = "min-el",
+            .type = QEMU_OPT_NUMBER,
+        }, {
             .name = "target",
             .type = QEMU_OPT_STRING,
         }, {
@@ -54,6 +57,7 @@ QemuOptsList qemu_semihosting_config_opts = {
 typedef struct SemihostingConfig {
     bool enabled;
     bool userspace_enabled;
+    unsigned min_el;
     SemihostingTarget target;
     char **argv;
     int argc;
@@ -66,6 +70,11 @@ static const char *semihost_chardev;
 bool semihosting_enabled(bool is_user)
 {
     return semihosting.enabled && (!is_user || semihosting.userspace_enabled);
+}
+
+unsigned semihosting_get_min_el(void)
+{
+    return semihosting.min_el;
 }
 
 SemihostingTarget semihosting_get_target(void)
@@ -144,6 +153,12 @@ int qemu_semihosting_config_options(const char *optstr)
                                                 true);
         semihosting.userspace_enabled = qemu_opt_get_bool(opts, "userspace",
                                                           false);
+        uint64_t min_el = qemu_opt_get_number(opts, "min-el", 0);
+        if (min_el > 3) {
+            error_report("semihosting min-el must be in 0..3");
+            return 1;
+        }
+        semihosting.min_el = min_el;
         const char *target = qemu_opt_get(opts, "target");
         /* setup of chardev is deferred until they are initialised */
         semihost_chardev = qemu_opt_get(opts, "chardev");

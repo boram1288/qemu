@@ -29,6 +29,7 @@
 #include "qemu/guest-random.h"
 #ifdef CONFIG_TCG
 #include "semihosting/common-semi.h"
+#include "semihosting/semihost.h"
 #endif
 #include "cpregs.h"
 #include "target/arm/gtimer.h"
@@ -10849,6 +10850,17 @@ static void tcg_handle_semihosting(CPUState *cs)
     ARMCPU *cpu = ARM_CPU(cs);
     CPUARMState *env = &cpu->env;
 
+    if (arm_current_el(env) < semihosting_get_min_el()) {
+        /* Do not inspect guest arguments or access the controller filesystem. */
+        if (is_a64(env)) {
+            env->xregs[0] = -1;
+            env->pc += 4;
+        } else {
+            env->regs[0] = -1;
+            env->regs[15] += env->thumb ? 2 : 4;
+        }
+        return;
+    }
     if (is_a64(env)) {
         qemu_log_mask(CPU_LOG_INT,
                       "...handling as semihosting call 0x%" PRIx64 "\n",
